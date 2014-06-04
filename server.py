@@ -20,6 +20,7 @@ from gevent.queue import Queue
 def note(format, *args):
     sys.stderr.write('[%s]\t%s\n' % (current_process().name, format%args))
 
+word_split = re.compile(r'[ ]')
 
 listener = _tcp_listener(('0.0.0.0', 8891))
 
@@ -58,7 +59,8 @@ class Publisher(object):
         self.context = zmq_context
         self.socket = zmq_context.socket(zmq.PUB)
         print "Publishing on: ", (BASE_PUBLISHER + process_num)
-        self.socket.bind("tcp://*:" + str(BASE_PUBLISHER + process_num))
+#        self.socket.bind("tcp://*:" + str(BASE_PUBLISHER + process_num))
+        self.socket.bind("ipc:///tmp/" + str(BASE_PUBLISHER + process_num))
         return
 
     def close(self):
@@ -76,7 +78,8 @@ class Subscriber(object):
             socket = zmq_context.socket(zmq.SUB)
             self.sockets[x] = socket
             print "Subscrbing on: ", (BASE_PUBLISHER + x)
-            socket.connect("tcp://localhost:" + str(BASE_PUBLISHER + x))
+#            socket.connect("tcp://localhost:" + str(BASE_PUBLISHER + x))
+            socket.connect("ipc:///tmp/" + str(BASE_PUBLISHER + x))
 
         self.start_subscribers()
 
@@ -85,8 +88,8 @@ class Subscriber(object):
         subscribers_pool = GPool(self.num_of_processes)
         subscriber_jobs = [subscribers_pool.spawn(self.start_listening_subscriber, self.sockets[x], processing_queue) for x in xrange(self.num_of_processes)]
 
-        processing_pool = GPool(500)
-        processing_jobs = [processing_pool.spawn(self.send_msg_to_user_socket, processing_queue) for x in xrange(500)]
+        processing_pool = GPool(5000)
+        processing_jobs = [processing_pool.spawn(self.send_msg_to_user_socket, processing_queue) for x in xrange(5000)]
         
 
     def send_msg_to_user_socket(self, processing_queue):
@@ -96,20 +99,18 @@ class Subscriber(object):
                 processing_queue.put(StopIteration)
                 print "Exiting one thread"
                 return
-            send_msg(job[0], job[1])
+            if job[0] in global_sockets.keys():
+                send_msg(global_sockets[job[0]], job[1])
 
         
     def start_listening_subscriber(self, socket, processing_queue):
         while True:
 #            print "Waiting on the SUB port"
             try:
-                op = socket.recv_multipart()
+                to_whom, content = socket.recv_multipart()
 #                print "Got Something"
-                to_whom = op[0]
-                content = op[1]
  #               print "Got Message into subscriber: ", to_whom, content
-                if to_whom in global_sockets.keys():
-                    processing_queue.put((global_sockets[to_whom], content))
+                processing_queue.put((to_whom, content))
 #                send_msg(global_sockets[to_whom], content)
             except:
                 # exc_info = sys.exc_info()
@@ -167,17 +168,25 @@ class ListeningServer(StreamServer):
                     socket.close()
                     break
 #                print "REST is: ", rest_str
-                if command == 'reg':
+#                if command[0] == 'r' and command == 'reg':
+                if command[0] == 'r':
                     rest_str = rest_str.lower()
                     global_sockets[rest_str] = socket
                     global_users[socket] = rest_str
                     self.subscriber.set_subscriber(rest_str)
-                elif command == 'snd':
+#                elif command[0] == 's' and command == 'snd':
+                elif command[0] == 's':
                     try:
                         msg_parts = rest_str.split(' ')
+#                        msg_parts = re.split(r'\)?[, .]\(?', rest_str)
+#                        msg_parts = word_split.split(rest_str)
                         to_whom = msg_parts[0].lower()
                         the_msg = ' '.join(msg_parts[1:])
-                        send_msg_to_subscriber(self.publisher, to_whom, global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
+                        if to_whom in global_sockets.keys():
+                            send_msg(global_sockets[to_whom], global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
+                        else:
+                            send_msg_to_subscriber(self.publisher, to_whom, global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
+#                       send_msg_to_subscriber(self.publisher, to_whom, global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
 #                        send_msg(global_sockets[to_whom], global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
 #                        gevent.spawn(send_msg, global_sockets[to_whom], global_users[socket] + ' ' + string.zfill(len(msg_parts) - 1, 4) + ' ' + the_msg)
                     except:
@@ -227,7 +236,7 @@ class ListeningServer(StreamServer):
             StreamServer.close()
 
 
-number_of_processes = 9
+number_of_processes = 13
 
     
 
